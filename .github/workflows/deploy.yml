@@ -1,4 +1,4 @@
-name: Deploy GitHub Pages & Build APK
+name: Build Android APK
 
 on:
   push:
@@ -7,17 +7,12 @@ on:
 
 permissions:
   contents: write
-  pages: write
-  id-token: write
 
 concurrency:
-  group: "build-and-deploy"
+  group: "build-apk"
   cancel-in-progress: false
 
 jobs:
-  # =========================================================================
-  # 1. Compilation Automatique du Fichier .APK Android
-  # =========================================================================
   build-apk:
     runs-on: ubuntu-latest
     steps:
@@ -58,22 +53,6 @@ jobs:
           npx cap add android
           npx cap sync android
 
-      - name: Disable Fullscreen & Fix Status Bar in Android Theme
-        run: |
-          cat << 'EOF' > android/app/src/main/res/values/styles.xml
-          <?xml version="1.0" encoding="utf-8"?>
-          <resources>
-              <style name="AppTheme.NoActionBar" parent="Theme.AppCompat.DayNight.NoActionBar">
-                  <item name="android:background">#0f172a</item>
-                  <item name="android:windowBackground">#0f172a</item>
-                  <item name="android:fitsSystemWindows">true</item>
-                  <item name="android:windowFullscreen">false</item>
-                  <item name="android:statusBarColor">#0f172a</item>
-                  <item name="android:windowLightStatusBar">false</item>
-              </style>
-          </resources>
-          EOF
-
       - name: Fix Kotlin duplicate classes
         run: |
           cat << 'EOF' >> android/app/build.gradle
@@ -111,28 +90,3 @@ jobs:
         with:
           name: vidange-auto-apk
           path: android/app/build/outputs/apk/debug/app-debug.apk
-
-  # =========================================================================
-  # 2. Hébergement Web HTTPS Gratuit (GitHub Pages)
-  # =========================================================================
-  deploy-pages:
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Pages
-        uses: actions/configure-pages@v5
-
-      - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: '.'
-
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
