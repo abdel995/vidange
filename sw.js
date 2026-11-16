@@ -40,6 +40,12 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
   
+  const url = event.request.url;
+  // Ignore Firebase, Firestore, and Google Identity APIs so they handle their own sync
+  if (url.includes('googleapis.com') || url.includes('firebaseio.com') || url.includes('identitytoolkit') || url.includes('firestore')) {
+    return;
+  }
+
   event.respondWith(
     fetch(event.request)
       .then((networkResponse) => {

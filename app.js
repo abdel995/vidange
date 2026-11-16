@@ -244,6 +244,7 @@ function loadState() {
 function saveState() {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(appState));
+    syncToCloud();
   } catch (e) {
     console.error('Erreur sauvegarde localStorage', e);
   }
@@ -1425,6 +1426,7 @@ document.addEventListener('DOMContentLoaded', () => {
   loadState();
   initNavigation();
   renderDashboard();
+  initFirebase();
 
   // Enregistrement du Service Worker pour le mode hors-ligne
   if ('serviceWorker' in navigator) {
@@ -1439,9 +1441,306 @@ document.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('.modal-overlay').forEach(overlay => {
     overlay.addEventListener('click', (e) => {
       if (e.target === overlay) {
-        overlay.classList.remove('active');
-        document.body.style.overflow = '';
+        closeModal(overlay.id);
       }
     });
   });
 });
+
+// ==========================================================================
+// 18. GOOGLE FIREBASE : AUTHENTIFICATION & BASE DE DONNÉES CLOUD
+// ==========================================================================
+const firebaseConfig = {
+  apiKey: "AIzaSyCYzw7jpeMLFuv073Gad-Y-FGMPRsFSN_Y",
+  authDomain: "car-tracking-appl.firebaseapp.com",
+  projectId: "car-tracking-appl",
+  storageBucket: "car-tracking-appl.firebasestorage.app",
+  messagingSenderId: "263152275533",
+  appId: "1:263152275533:web:33806b0b818c67b1964c04",
+  measurementId: "G-8L8RKW7DWZ"
+};
+
+let fbApp = null;
+let fbAuth = null;
+let fbDb = null;
+let currentUser = null;
+let firestoreUnsubscribe = null;
+let authMode = 'login'; // 'login' | 'register'
+
+function initFirebase() {
+  try {
+    if (typeof firebase !== 'undefined') {
+      if (!firebase.apps.length) {
+        fbApp = firebase.initializeApp(firebaseConfig);
+      } else {
+        fbApp = firebase.app();
+      }
+      fbAuth = firebase.auth();
+      fbDb = firebase.firestore();
+
+      // Activer le cache hors-ligne Firestore
+      fbDb.enablePersistence({ synchronizeTabs: true }).catch((err) => {
+        console.log('Info persistance Firestore:', err.code);
+      });
+
+      // Écouter l'état de connexion de l'utilisateur
+      fbAuth.onAuthStateChanged(handleAuthStateChanged);
+    } else {
+      console.warn("Firebase SDK non chargé (mode hors-ligne)");
+    }
+  } catch (err) {
+    console.error('Erreur initialisation Firebase:', err);
+  }
+}
+
+function handleAuthStateChanged(user) {
+  currentUser = user;
+  updateUserUI();
+
+  if (user) {
+    // L'utilisateur est connecté !
+    setSyncStatus('syncing');
+
+    // Écouter en temps réel les données de cet utilisateur dans Firestore
+    if (firestoreUnsubscribe) firestoreUnsubscribe();
+
+    const userDocRef = fbDb.collection('users').doc(user.uid);
+    firestoreUnsubscribe = userDocRef.onSnapshot((doc) => {
+      if (doc.exists) {
+        const cloudData = doc.data();
+        if (cloudData && cloudData.vehicles) {
+          appState = { ...DEFAULT_DATA, ...cloudData };
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(appState));
+          renderDashboard();
+          renderVehiclesView();
+          renderHistoryView();
+          renderPartsView();
+        }
+      } else {
+        // Premier enregistrement : sauvegarder les données locales existantes dans le cloud
+        syncToCloud();
+      }
+      setSyncStatus('synced');
+    }, (error) => {
+      console.warn('Erreur écoute Firestore:', error);
+      setSyncStatus('offline');
+    });
+
+    closeModal('modal-auth');
+    showToast('Connecté : ' + (user.displayName || user.email));
+  } else {
+    // Déconnecté
+    if (firestoreUnsubscribe) {
+      firestoreUnsubscribe();
+      firestoreUnsubscribe = null;
+    }
+    setSyncStatus('offline');
+  }
+}
+
+function updateUserUI() {
+  const headerUserName = document.getElementById('header-user-name');
+  const headerAvatar = document.getElementById('header-avatar-circle');
+  const accountUserName = document.getElementById('account-user-name');
+  const accountUserEmail = document.getElementById('account-user-email');
+  const accountAvatar = document.getElementById('account-avatar-large');
+  const accountStats = document.getElementById('account-data-stats');
+
+  if (currentUser) {
+    const displayName = currentUser.displayName || (currentUser.email ? currentUser.email.split('@')[0] : 'Mon Compte');
+    if (headerUserName) headerUserName.textContent = displayName;
+    if (accountUserName) accountUserName.textContent = currentUser.displayName || displayName;
+    if (accountUserEmail) accountUserEmail.textContent = currentUser.email || '';
+
+    // Photo ou initiale
+    if (currentUser.photoURL) {
+      if (headerAvatar) headerAvatar.innerHTML = `<img src="${currentUser.photoURL}" class="user-avatar-img" alt="avatar">`;
+      if (accountAvatar) accountAvatar.innerHTML = `<img src="${currentUser.photoURL}" class="user-avatar-img" alt="avatar">`;
+    } else {
+      const initial = displayName.charAt(0).toUpperCase();
+      if (headerAvatar) headerAvatar.textContent = initial;
+      if (accountAvatar) accountAvatar.textContent = initial;
+    }
+
+    if (accountStats) {
+      const vCount = (appState.vehicles || []).length;
+      const vidCount = (appState.vidanges || []).length;
+      accountStats.textContent = `${vCount} Véhicule(s) • ${vidCount} Vidange(s) enregistrée(s)`;
+    }
+  } else {
+    if (headerUserName) headerUserName.textContent = 'Connexion';
+    if (headerAvatar) headerAvatar.textContent = '👤';
+  }
+}
+
+function setSyncStatus(status) {
+  // status: 'synced' | 'syncing' | 'offline'
+  const headerDot = document.getElementById('header-sync-dot');
+  const accountDot = document.getElementById('account-sync-dot');
+  const accountStatusText = document.getElementById('account-sync-status-text');
+
+  if (headerDot) {
+    headerDot.className = 'cloud-status-dot ' + status;
+  }
+  if (accountDot) {
+    accountDot.className = 'cloud-status-dot ' + status;
+  }
+  if (accountStatusText) {
+    if (status === 'synced') {
+      accountStatusText.textContent = 'Synchronisé en direct avec Firebase Cloud';
+      accountStatusText.style.color = 'var(--accent-emerald-light)';
+    } else if (status === 'syncing') {
+      accountStatusText.textContent = 'Synchronisation en cours...';
+      accountStatusText.style.color = 'var(--accent-amber-light)';
+    } else {
+      accountStatusText.textContent = 'Mode local (non connecté au cloud)';
+      accountStatusText.style.color = 'var(--text-muted)';
+    }
+  }
+}
+
+function syncToCloud() {
+  if (!currentUser || !fbDb) return;
+  try {
+    setSyncStatus('syncing');
+    appState.updatedAt = new Date().toISOString();
+    fbDb.collection('users').doc(currentUser.uid).set(appState, { merge: true })
+      .then(() => {
+        setSyncStatus('synced');
+      })
+      .catch((err) => {
+        console.warn('Erreur sauvegarde cloud Firestore:', err);
+        setSyncStatus('offline');
+      });
+  } catch (e) {
+    console.error('Erreur syncToCloud:', e);
+  }
+}
+
+function manualSyncToCloud() {
+  if (!currentUser) {
+    openModal('modal-auth');
+    return;
+  }
+  syncToCloud();
+  showToast('Données synchronisées dans le cloud Firebase !');
+}
+
+// --------------------------------------------------------------------------
+// MODES AUTHENTIFICATION (LOGIN / REGISTER / GOOGLE)
+// --------------------------------------------------------------------------
+function setAuthMode(mode) {
+  authMode = mode;
+  const tabLogin = document.getElementById('tab-login');
+  const tabRegister = document.getElementById('tab-register');
+  const title = document.getElementById('auth-modal-title');
+  const titleIcon = document.getElementById('auth-modal-title-icon');
+  const submitBtn = document.getElementById('auth-submit-btn');
+  const googleBtnText = document.getElementById('google-btn-text');
+  const errorBox = document.getElementById('auth-error-box');
+
+  if (errorBox) errorBox.style.display = 'none';
+
+  if (mode === 'login') {
+    if (tabLogin) tabLogin.classList.add('active');
+    if (tabRegister) tabRegister.classList.remove('active');
+    if (title) title.textContent = 'Connexion à votre compte';
+    if (titleIcon) titleIcon.textContent = '🔐';
+    if (submitBtn) submitBtn.textContent = 'Se connecter';
+    if (googleBtnText) googleBtnText.textContent = 'Continuer avec Google';
+  } else {
+    if (tabLogin) tabLogin.classList.remove('active');
+    if (tabRegister) tabRegister.classList.add('active');
+    if (title) title.textContent = 'Créer un nouveau compte';
+    if (titleIcon) titleIcon.textContent = '✨';
+    if (submitBtn) submitBtn.textContent = 'Créer mon compte';
+    if (googleBtnText) googleBtnText.textContent = "S'inscrire avec Google";
+  }
+}
+
+function showAuthError(msg) {
+  const errorBox = document.getElementById('auth-error-box');
+  if (errorBox) {
+    errorBox.textContent = msg;
+    errorBox.style.display = 'block';
+  }
+}
+
+function handleGoogleSignIn() {
+  if (!fbAuth) {
+    alert("Firebase n'est pas encore initialisé. Vérifiez votre connexion internet.");
+    return;
+  }
+  const provider = new firebase.auth.GoogleAuthProvider();
+  fbAuth.signInWithPopup(provider).catch((error) => {
+    console.warn("Popup error, trying redirect:", error);
+    if (error.code === 'auth/popup-blocked' || error.code === 'auth/cancelled-popup-request') {
+      fbAuth.signInWithRedirect(provider);
+    } else if (error.code !== 'auth/popup-closed-by-user') {
+      showAuthError(translateFirebaseError(error.code, error.message));
+    }
+  });
+}
+
+function handleEmailAuthSubmit(event) {
+  event.preventDefault();
+  if (!fbAuth) return;
+
+  const email = document.getElementById('auth-email').value.trim();
+  const password = document.getElementById('auth-password').value;
+  const errorBox = document.getElementById('auth-error-box');
+  if (errorBox) errorBox.style.display = 'none';
+
+  if (authMode === 'login') {
+    fbAuth.signInWithEmailAndPassword(email, password)
+      .catch((error) => {
+        showAuthError(translateFirebaseError(error.code, error.message));
+      });
+  } else {
+    fbAuth.createUserWithEmailAndPassword(email, password)
+      .catch((error) => {
+        showAuthError(translateFirebaseError(error.code, error.message));
+      });
+  }
+}
+
+function handleSignOut() {
+  if (fbAuth) {
+    fbAuth.signOut().then(() => {
+      showToast('Déconnexion effectuée');
+      closeModal('modal-account');
+    });
+  }
+}
+
+function openAuthOrAccountModal() {
+  if (currentUser) {
+    updateUserUI();
+    openModal('modal-account');
+  } else {
+    setAuthMode('login');
+    openModal('modal-auth');
+  }
+}
+
+function translateFirebaseError(code, defaultMsg) {
+  switch (code) {
+    case 'auth/invalid-email':
+      return 'Adresse e-mail invalide.';
+    case 'auth/user-not-found':
+      return 'Aucun compte trouvé avec cet e-mail.';
+    case 'auth/wrong-password':
+    case 'auth/invalid-credential':
+      return 'Mot de passe incorrect ou informations invalides.';
+    case 'auth/email-already-in-use':
+      return 'Un compte existe déjà avec cette adresse e-mail.';
+    case 'auth/weak-password':
+      return 'Le mot de passe doit contenir au moins 6 caractères.';
+    case 'auth/network-request-failed':
+      return 'Erreur de connexion réseau. Vérifiez votre connexion.';
+    case 'auth/operation-not-allowed':
+      return "Cette méthode de connexion n'est pas encore activée dans votre console Firebase.";
+    default:
+      return defaultMsg || 'Une erreur est survenue lors de la connexion.';
+  }
+}
