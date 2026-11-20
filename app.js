@@ -227,9 +227,8 @@ function loadState() {
     if (raw) {
       const parsed = JSON.parse(raw);
       appState = { ...DEFAULT_DATA, ...parsed };
-      if (!appState.vehicles || appState.vehicles.length === 0) {
-        appState.vehicles = DEFAULT_DATA.vehicles;
-        appState.activeVehicleId = DEFAULT_DATA.vehicles[0].id;
+      if (!Array.isArray(appState.vehicles)) {
+        appState.vehicles = [];
       }
     } else {
       appState = JSON.parse(JSON.stringify(DEFAULT_DATA));
@@ -312,7 +311,34 @@ function switchView(viewName) {
 // ==========================================================================
 function renderDashboard() {
   const car = getActiveVehicle();
-  if (!car) return;
+  if (!car) {
+    const carLabel = document.getElementById('header-car-label');
+    if (carLabel) carLabel.textContent = 'Aucun véhicule';
+    const carTitleEl = document.getElementById('dash-car-name');
+    const carPlateEl = document.getElementById('dash-car-plate');
+    const carKmValEl = document.getElementById('dash-odometer-val');
+    if (carTitleEl) carTitleEl.textContent = 'Aucun véhicule';
+    if (carPlateEl) carPlateEl.textContent = '---';
+    if (carKmValEl) carKmValEl.textContent = '0';
+
+    const cardContainer = document.getElementById('dash-vidange-status-card');
+    if (cardContainer) {
+      cardContainer.className = 'vidange-status-card';
+      cardContainer.innerHTML = `
+        <div class="empty-state" style="padding: 24px 16px;">
+          <span class="empty-state-icon">🚗</span>
+          <div class="empty-state-title">Aucun véhicule dans votre garage</div>
+          <div class="empty-state-desc">Ajoutez votre voiture pour commencer le suivi des vidanges, filtres et pièces d'usure.</div>
+          <button class="btn btn-primary" onclick="openCarModal()" style="margin-top: 10px;">
+            <span>+ Ajouter un véhicule</span>
+          </button>
+        </div>
+      `;
+    }
+    const urgentParts = document.getElementById('dash-urgent-parts-list');
+    if (urgentParts) urgentParts.innerHTML = '';
+    return;
+  }
 
   // Header car switcher button text
   const carLabel = document.getElementById('header-car-label');
@@ -543,11 +569,23 @@ function calculateAllPartsStatus(car) {
 let currentPartsFilter = 'all';
 
 function renderPartsView() {
-  const car = getActiveVehicle();
-  if (!car) return;
-
   const container = document.getElementById('parts-cards-container');
   if (!container) return;
+
+  const car = getActiveVehicle();
+  if (!car) {
+    container.innerHTML = `
+      <div class="empty-state">
+        <span class="empty-state-icon">🚗</span>
+        <div class="empty-state-title">Aucun véhicule actif</div>
+        <div class="empty-state-desc">Ajoutez un véhicule dans l'onglet Garage pour suivre ses pièces d'usure.</div>
+        <button class="btn btn-primary" onclick="openCarModal()" style="margin-top: 10px;">
+          <span>+ Ajouter un véhicule</span>
+        </button>
+      </div>
+    `;
+    return;
+  }
 
   const allParts = calculateAllPartsStatus(car);
   const filtered = currentPartsFilter === 'all' 
@@ -635,13 +673,24 @@ function filterParts(category) {
 let currentHistoryFilter = 'all';
 
 function renderHistoryView() {
-  const car = getActiveVehicle();
-  if (!car) return;
-
   const container = document.getElementById('history-timeline-list');
   const countBadge = document.getElementById('history-total-count');
   const totalSpentEl = document.getElementById('history-total-spent');
   if (!container) return;
+
+  const car = getActiveVehicle();
+  if (!car) {
+    if (totalSpentEl) totalSpentEl.textContent = `0 ${appState.currency || 'MAD'}`;
+    if (countBadge) countBadge.textContent = '0 intervention';
+    container.innerHTML = `
+      <div class="empty-state">
+        <span class="empty-state-icon">📋</span>
+        <div class="empty-state-title">Aucun véhicule actif</div>
+        <div class="empty-state-desc">Ajoutez un véhicule dans l'onglet Garage pour consulter son historique d'entretien.</div>
+      </div>
+    `;
+    return;
+  }
 
   // Rassembler toutes les vidanges et tous les changements de pièces pour ce véhicule
   const vidanges = appState.vidanges
@@ -768,6 +817,21 @@ function renderVehiclesView() {
   const container = document.getElementById('vehicles-list-container');
   if (!container) return;
 
+  if (!appState.vehicles || appState.vehicles.length === 0) {
+    container.innerHTML = `
+      <div class="empty-state">
+        <span class="empty-state-icon">🚗</span>
+        <div class="empty-state-title">Aucun véhicule dans votre garage</div>
+        <div class="empty-state-desc">Ajoutez votre voiture pour commencer le suivi d'entretien et des vidanges.</div>
+        <button class="btn btn-primary" onclick="openCarModal()" style="margin-top: 10px;">
+          <span>+ Ajouter un véhicule</span>
+        </button>
+      </div>
+    `;
+    updateGDriveModalUI();
+    return;
+  }
+
   let html = '';
   appState.vehicles.forEach(v => {
     const isActive = v.id === appState.activeVehicleId;
@@ -778,7 +842,7 @@ function renderVehiclesView() {
             <span class="part-emoji-icon">🚗</span>
             <div>
               <div class="part-name">${v.brand} ${v.model} (${v.year})</div>
-              <div class="part-last-change">${v.plate || 'Sans immatriculation'} • ${v.fuel.toUpperCase()}</div>
+              <div class="part-last-change">${v.plate || 'Sans immatriculation'} • ${v.fuel ? v.fuel.toUpperCase() : ''}</div>
             </div>
           </div>
           ${isActive 
@@ -787,13 +851,11 @@ function renderVehiclesView() {
           }
         </div>
 
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 6px; font-size: 0.82rem;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 8px; font-size: 0.82rem;">
           <span>Compteur actuel: <strong>${formatNumber(v.currentKm)} km</strong></span>
-          <div style="display: flex; gap: 6px;">
-            <button class="icon-button" onclick="openCarModal('${v.id}')" title="Modifier" style="width: 32px; height: 32px;">✏️</button>
-            ${appState.vehicles.length > 1 ? `
-              <button class="icon-button" onclick="deleteVehicle('${v.id}')" title="Supprimer" style="width: 32px; height: 32px; color: var(--accent-rose);">🗑️</button>
-            ` : ''}
+          <div style="display: flex; gap: 8px;">
+            <button class="icon-button" onclick="openCarModal('${v.id}')" title="Modifier" style="width: 34px; height: 34px;">✏️</button>
+            <button class="icon-button" onclick="deleteVehicle('${v.id}')" title="Supprimer ce véhicule" style="width: 34px; height: 34px; color: var(--accent-rose); border-color: rgba(239, 68, 68, 0.4);">🗑️</button>
           </div>
         </div>
       </div>
@@ -818,7 +880,11 @@ function setActiveVehicle(vehicleId) {
 // ==========================================================================
 function openVidangeModal() {
   const car = getActiveVehicle();
-  if (!car) return;
+  if (!car) {
+    alert("Veuillez d'abord ajouter un véhicule dans le garage.");
+    openCarModal();
+    return;
+  }
 
   const form = document.getElementById('vidange-form');
   form.reset();
@@ -936,7 +1002,11 @@ function deleteVidange(vidangeId) {
 // ==========================================================================
 function openPartModal(defaultPartKey = null) {
   const car = getActiveVehicle();
-  if (!car) return;
+  if (!car) {
+    alert("Veuillez d'abord ajouter un véhicule dans le garage.");
+    openCarModal();
+    return;
+  }
 
   const form = document.getElementById('part-form');
   form.reset();
@@ -1033,7 +1103,11 @@ function deleteMaintenanceRecord(recordId) {
 // ==========================================================================
 function openOdometerModal() {
   const car = getActiveVehicle();
-  if (!car) return;
+  if (!car) {
+    alert("Veuillez d'abord ajouter un véhicule dans le garage.");
+    openCarModal();
+    return;
+  }
 
   document.getElementById('odometer-car-name').textContent = `${car.brand} ${car.model}`;
   document.getElementById('quick-odometer-input').value = car.currentKm;
@@ -1066,6 +1140,7 @@ let editingCarId = null;
 function openCarModal(carId = null) {
   editingCarId = carId;
   const modalTitle = document.getElementById('car-modal-title');
+  const deleteBtn = document.getElementById('btn-delete-car-modal');
   const form = document.getElementById('car-form');
   form.reset();
 
@@ -1073,6 +1148,7 @@ function openCarModal(carId = null) {
     const car = appState.vehicles.find(v => v.id === carId);
     if (car) {
       modalTitle.textContent = 'Modifier le véhicule';
+      if (deleteBtn) deleteBtn.style.display = 'inline-flex';
       document.getElementById('car-brand').value = car.brand || '';
       document.getElementById('car-model').value = car.model || '';
       document.getElementById('car-year').value = car.year || '';
@@ -1084,10 +1160,18 @@ function openCarModal(carId = null) {
     }
   } else {
     modalTitle.textContent = 'Ajouter un véhicule';
+    if (deleteBtn) deleteBtn.style.display = 'none';
     document.getElementById('car-interval').value = 10000;
   }
 
   openModal('modal-car');
+}
+
+function deleteCurrentEditingCar() {
+  if (!editingCarId) return;
+  const idToDelete = editingCarId;
+  closeModal('modal-car');
+  deleteVehicle(idToDelete);
 }
 
 function handleSaveCar(event) {
@@ -1138,36 +1222,53 @@ function handleSaveCar(event) {
   closeModal('modal-car');
   renderDashboard();
   renderVehiclesView();
+  renderPartsView();
+  renderHistoryView();
 }
 
 function deleteVehicle(carId) {
-  if (appState.vehicles.length <= 1) {
-    alert('Vous devez conserver au moins un véhicule.');
-    return;
-  }
   if (!confirm('Êtes-vous sûr de vouloir supprimer ce véhicule et toutes ses données associées ?')) return;
 
-  appState.vehicles = appState.vehicles.filter(v => v.id !== carId);
-  appState.vidanges = appState.vidanges.filter(v => v.vehicleId !== carId);
-  appState.maintenanceRecords = appState.maintenanceRecords.filter(r => r.vehicleId !== carId);
+  appState.vehicles = (appState.vehicles || []).filter(v => v.id !== carId);
+  appState.vidanges = (appState.vidanges || []).filter(v => v.vehicleId !== carId);
+  appState.maintenanceRecords = (appState.maintenanceRecords || []).filter(r => r.vehicleId !== carId);
 
   if (appState.activeVehicleId === carId) {
-    appState.activeVehicleId = appState.vehicles[0].id;
+    appState.activeVehicleId = (appState.vehicles && appState.vehicles.length > 0) ? appState.vehicles[0].id : null;
   }
 
   saveState();
   showToast('Véhicule supprimé');
   renderDashboard();
   renderVehiclesView();
+  renderPartsView();
+  renderHistoryView();
 }
 
 function openCarSwitcherModal() {
   const container = document.getElementById('car-switcher-list');
+  if (!container) return;
+
+  if (!appState.vehicles || appState.vehicles.length === 0) {
+    container.innerHTML = `
+      <div class="empty-state" style="padding: 20px 10px;">
+        <span class="empty-state-icon">🚗</span>
+        <div class="empty-state-title">Aucun véhicule</div>
+        <div class="empty-state-desc">Ajoutez votre premier véhicule pour le sélectionner.</div>
+        <button class="btn btn-primary" onclick="closeCarSwitcherModal(); openCarModal();" style="margin-top: 12px;">
+          + Ajouter un véhicule
+        </button>
+      </div>
+    `;
+    openModal('modal-car-switcher');
+    return;
+  }
+
   let html = '';
   appState.vehicles.forEach(v => {
     const isActive = v.id === appState.activeVehicleId;
     html += `
-      <div class="part-card" onclick="setActiveVehicle('${v.id}')" style="margin-bottom: 8px; border-left: 4px solid ${isActive ? 'var(--accent-emerald)' : 'var(--border-color)'};">
+      <div class="part-card" onclick="setActiveVehicle('${v.id}')" style="margin-bottom: 8px; border-left: 4px solid ${isActive ? 'var(--accent-emerald)' : 'var(--border-color)'}; cursor: pointer;">
         <div class="part-card-top">
           <div class="part-title-group">
             <span class="part-emoji-icon">🚗</span>
